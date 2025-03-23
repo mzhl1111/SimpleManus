@@ -171,7 +171,7 @@ class BrowserUseTool(BaseModel, Generic[Context]):
         except Exception as e:
             return f"go to url Error: {str(e)}"
         
-    async def go_back(self):
+    async def go_back(self, placeholder):
         try:
             context = await self._ensure_browser_initialized()
             await context.go_back()
@@ -318,13 +318,13 @@ class BrowserUseTool(BaseModel, Generic[Context]):
             except:
                 return error_msg
         
-    async def get_current_state(self):
+    async def get_current_state(self, placeholder):
         """
         Get the current browser state as a ToolResult.
         If context is not provided, uses self.context.
         """
         try:
-            ctx = self._ensure_browser_initialized()
+            ctx = await self._ensure_browser_initialized()
             state = await ctx.get_state()
 
             viewport_height = 0
@@ -383,7 +383,7 @@ class BrowserUseTool(BaseModel, Generic[Context]):
         return "Closed current tab"
     
     async def wait(self, seconds: int):
-        seconds_to_wait = seconds if seconds is not None else 3
+        seconds_to_wait = int(seconds) if seconds is not None else 3
         await asyncio.sleep(seconds_to_wait)
         return f"Waited for {seconds_to_wait} seconds"
         

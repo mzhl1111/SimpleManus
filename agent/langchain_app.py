@@ -61,7 +61,7 @@ tools = [
         name="click_element",
         func=browser_tool.click_element,
         coroutine=browser_tool.click_element,
-        description="Click an element identified by its index. **Required:** index (integer)."
+        description="Click an element in the webpage identified by its index. **Required:** index (integer)."
     ),
     Tool(
         name="scroll_down",
@@ -103,7 +103,7 @@ tools = [
         name="get_current_state",
         func=browser_tool.get_current_state,
         coroutine=browser_tool.get_current_state,
-        description="Retrieve the current browser state. **No additional parameters required.**"
+        description="Retrieve the current browser state. ALWAYS use this tool to get dom element index before using click or dropdown tools. **No additional parameters required.**"
     ),
     Tool(
         name="switch_tab",
@@ -139,11 +139,11 @@ agent = initialize_agent(
     llm,
     agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
     verbose=True,          # Enables detailed logging of the internal chain-of-thought.
-    max_iterations=10      # Limits the number of thought/tool-calling cycles.
+    max_iterations=20      # Limits the number of thought/tool-calling cycles.
 )
 
 
 if __name__ == "__main__":
-    task = "What's the date today"
+    task = "get today's date and list all the movies that are playing on theaters tomorrow"
     result = asyncio.run(agent.arun(task))
     print("Final result:", result)
