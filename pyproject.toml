@@ -17,7 +17,10 @@ dependencies = [
     "langgraph (>=0.3.17,<0.4.0)",
     "numexpr (>=2.10.2,<3.0.0)",
     "duckduckgo-search (>=7.5.2,<8.0.0)",
-    "pytest-playwright (>=0.7.0,<0.8.0)"
+    "pytest-playwright (>=0.7.0,<0.8.0)",
+    "markdown (>=3.7,<4.0)",
+    "pdfkit (>=1.0.0,<2.0.0)",
+    "pypandoc (>=1.15,<2.0)"
 ]
 
 
