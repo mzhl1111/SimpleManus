@@ -1,0 +1,10 @@
+langchain>=0.3.0
+langchain-openai>=0.0.2
+langchain-community>=0.0.2
+langgraph>=0.1.0
+python-dotenv>=1.0.0
+tavily-python>=0.1.6
+pydantic>=2.0.0
+colorama>=0.4.4
+requests>=2.28.0
+openai>=1.0.0 
