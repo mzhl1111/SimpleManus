@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def extract_travel_info(user_input: str) -> Dict[str, Any]:
-    extractor = InformationExtractor(api_key=config.OPENAI_API_KEY)
+    extractor = InformationExtractor(api_key=config.OPENROUTER_API_KEY)
     extracted_info = extractor.extract_information(user_input)
     
     # If no destination was extracted, try to infer one
@@ -294,7 +294,8 @@ def generate_daily_itinerary(destination: str, duration: Optional[str] = None,
         llm = ChatOpenAI(
             model=config.LLM_MODEL, 
             temperature=0.7,
-            api_key=SecretStr(config.OPENAI_API_KEY)
+            api_key=SecretStr(config.OPENROUTER_API_KEY),
+            base_url="https://openrouter.ai/api/v1"
         )
         response = llm.invoke(prompt.format(
             destination=destination,
@@ -444,14 +445,15 @@ def suggest_destination(user_input: str) -> str:
                 from langchain_openai import ChatOpenAI
                 
                 # Ensure API key is not None
-                api_key = config.OPENAI_API_KEY
+                api_key = config.OPENROUTER_API_KEY
                 if not api_key:
                     raise ValueError("OpenAI API key is required")
                 
                 llm = ChatOpenAI(
                     model=config.LLM_MODEL,
                     temperature=0,
-                    api_key=SecretStr(api_key)
+                    api_key=SecretStr(api_key),
+                    base_url="https://openrouter.ai/api/v1"
                 )
                 
                 prompt = (

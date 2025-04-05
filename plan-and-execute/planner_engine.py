@@ -39,14 +39,15 @@ class Planner:
     """Generates a structured plan for travel planning"""
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key_str = api_key or config.OPENAI_API_KEY
+        self.api_key_str = api_key or config.OPENROUTER_API_KEY
         if not self.api_key_str:
             raise ValueError("Planner requires OpenAI API Key")
 
         self.llm = ChatOpenAI(
             model=config.LLM_MODEL,
             temperature=0.2,
-            api_key=SecretStr(self.api_key_str)
+            api_key=SecretStr(self.api_key_str),
+            base_url="https://openrouter.ai/api/v1"
         )
 
         self.planning_template = PromptTemplate(
@@ -225,14 +226,15 @@ class Replanner:
     """Re-evaluates the plan based on execution results"""
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key_str = api_key or config.OPENAI_API_KEY
+        self.api_key_str = api_key or config.OPENROUTER_API_KEY
         if not self.api_key_str:
             raise ValueError("Replanner requires OpenAI API Key")
 
         self.llm = ChatOpenAI(
             model=config.LLM_MODEL,
             temperature=0.2,
-            api_key=SecretStr(self.api_key_str)
+            api_key=SecretStr(self.api_key_str),
+            base_url="https://openrouter.ai/api/v1"
         )
 
     def replan(

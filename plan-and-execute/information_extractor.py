@@ -28,13 +28,14 @@ class InformationExtractor:
         Args:
             api_key: OpenAI API key (uses config if not provided)
         """
-        self.api_key = api_key or config.OPENAI_API_KEY
+        self.api_key = api_key or config.OPENROUTER_API_KEY
         
         # Initialize LLM
         self.llm = ChatOpenAI(
             model=config.LLM_MODEL,
             temperature=0.0,  # Lower temperature for more consistent extraction
-            api_key=SecretStr(self.api_key) if self.api_key else None
+            api_key=SecretStr(self.api_key) if self.api_key else None,
+            base_url="https://openrouter.ai/api/v1"
         )
         
         # Create extraction template using ChatPromptTemplate

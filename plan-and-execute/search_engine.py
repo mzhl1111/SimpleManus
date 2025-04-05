@@ -33,7 +33,7 @@ class SearchEngine:
             api_key: Tavily API key (falls back to config if not provided)
         """
         self.tavily_api_key_str = api_key or config.TAVILY_API_KEY
-        self.openai_api_key_str = config.OPENAI_API_KEY
+        self.openai_api_key_str = config.OPENROUTER_API_KEY
 
         # Raise error if Tavily key is missing
         if not self.tavily_api_key_str:
@@ -51,7 +51,8 @@ class SearchEngine:
         self.llm = ChatOpenAI(
             model=config.LLM_MODEL,
             temperature=0.1,
-            api_key=SecretStr(self.openai_api_key_str)
+            api_key=SecretStr(self.openai_api_key_str),
+            base_url="https://openrouter.ai/api/v1"
         )
         
     
