@@ -17,10 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Remove unused prompts
-# SEARCH_QUERY_PROMPT = """..."""
-# SUMMARY_PROMPT = """..."""
-
 
 class SearchEngine:
     """Search engine for retrieving travel information"""
@@ -54,7 +50,6 @@ class SearchEngine:
             api_key=SecretStr(self.openai_api_key_str),
             base_url="https://openrouter.ai/api/v1"
         )
-        
     
     def search(self, query: str) -> List[Dict[str, Any]]:
         """

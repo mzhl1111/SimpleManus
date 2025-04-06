@@ -1,18 +1,14 @@
 """
-Planner and executor components for the travel planning assistant.
-Follows the Plan-and-Execute pattern.
+Planner and executor components for the general-purpose agent.
 """
+import json
 import logging
-from typing import Dict, Any, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, ValidationError, SecretStr
+from typing import List, Dict, Any
 
 import config
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import PromptTemplate
+from agent_tools import AGENT_TOOLS
 from prompt_templates import PLANNING_PROMPT
-from travel_tools import TRAVEL_TOOLS
-import json
-import re
 
 # Configure logging
 logging.basicConfig(
@@ -22,445 +18,316 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class PlanStep(BaseModel):
-    """A single step in the travel plan"""
-    step_id: int = Field(description="Unique identifier for this step")
-    description: str = Field(description="Description of what this step should accomplish")
-    tool: str = Field(description="Tool to use for this step (one of the available tools)")
-    parameters: Dict[str, Any] = Field(description="Parameters to pass to the tool")
-
-
-class TravelPlan(BaseModel):
-    """A structured travel plan consisting of steps"""
-    steps: List[PlanStep] = Field(description="List of steps to execute in order")
-
-
 class Planner:
-    """Generates a structured plan for travel planning"""
-
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key_str = api_key or config.OPENROUTER_API_KEY
-        if not self.api_key_str:
-            raise ValueError("Planner requires OpenAI API Key")
-
+    """Component for creating plans to fulfill user requests"""
+    
+    def __init__(self):
+        """Initialize the planner with language model"""
         self.llm = ChatOpenAI(
             model=config.LLM_MODEL,
-            temperature=0.2,
-            api_key=SecretStr(self.api_key_str),
+            api_key=config.OPENROUTER_API_KEY,
             base_url="https://openrouter.ai/api/v1"
         )
-
-        self.planning_template = PromptTemplate(
-            template=PLANNING_PROMPT,
-            input_variables=["user_query"]
-        )
-
-
+    
     def create_plan(self, user_query: str) -> List[Dict[str, Any]]:
-        """Create a plan for the travel request."""
-        logger.info(f"Creating plan for: {user_query}")
-        
-        # Check if user_query is None or empty
-        if user_query is None or user_query.strip() == "":
-            logger.warning("Empty user query received, using default plan")
-            return self._default_plan(user_query)
-            
-        try:
-            # Use manual JSON parsing instead of structured output
-            response = self.llm.invoke(
-                self.planning_template.format(
-                    user_query=user_query
-                )
-            )
-            
-            # Extract JSON string - more robust parsing method
-            logger.info("Received planning response, parsing JSON")
-            response_text = response.content
-            
-            # Try multiple ways to parse JSON
-            try:
-                # Try to directly parse the entire response
-                plan_data = json.loads(response_text)
-                if "steps" in plan_data:
-                    logger.info(f"Successfully parsed plan with {len(plan_data['steps'])} steps")
-                    return plan_data["steps"]
-            except json.JSONDecodeError:
-                # Try to find JSON object boundaries
-                logger.info("Direct JSON parse failed, trying to extract JSON object")
-                import re
-                
-                # Try to extract JSON object from text
-                json_pattern = r'(\{[\s\S]*\})'
-                match = re.search(json_pattern, response_text)
-                if match:
-                    try:
-                        json_str = match.group(1)
-                        plan_data = json.loads(json_str)
-                        if "steps" in plan_data:
-                            logger.info(f"Successfully extracted and parsed plan with {len(plan_data['steps'])} steps")
-                            return plan_data["steps"]
-                    except json.JSONDecodeError:
-                        logger.warning("Extracted JSON is still invalid")
-                
-                # Try to extract from markdown code block
-                code_block_pattern = r'```(?:json)?\s*([\s\S]*?)\s*```'
-                match = re.search(code_block_pattern, response_text)
-                if match:
-                    try:
-                        json_str = match.group(1)
-                        plan_data = json.loads(json_str)
-                        if "steps" in plan_data:
-                            logger.info(f"Successfully extracted JSON from code block with {len(plan_data['steps'])} steps")
-                            return plan_data["steps"]
-                    except json.JSONDecodeError:
-                        logger.warning("Code block JSON is invalid")
-            
-            # If all parsing methods fail, use default plan
-            logger.error(f"All JSON parsing attempts failed. Response: {response_text[:100]}...")
-            return self._default_plan(user_query)
-                
-        except Exception as e:
-            logger.error(f"Error creating plan: {str(e)}. Falling back to default plan.")
-            return self._default_plan(user_query)
-            
-    def _default_plan(self, user_query: str) -> List[Dict[str, Any]]:
-        """Create a default plan when automatic planning fails.
+        """Generate a plan for fulfilling the user's request
         
         Args:
-            user_query: The original user query
+            user_query: User's original request
             
         Returns:
-            A list of default plan steps
+            List of plan steps, each a dictionary with step details
         """
-        logger.info("Creating default travel plan")
+        logger.info(f"Creating plan for: {user_query}")
         
-        # A simple sequential plan with the essential steps
+        # Create prompt with the user query
+        formatted_prompt = PLANNING_PROMPT.format(user_query=user_query)
+        
+        # Generate plan using language model
+        response = self.llm.invoke(formatted_prompt)
+        
+        try:
+            # Extract the plan steps
+            response_text = response.content
+            
+            # Log raw response for debugging
+            logger.info(f"Raw LLM planning response: {response_text[:200]}...")
+            
+            # Handle different possible formats in the model's output
+            # Clean the response to extract just the JSON part
+            json_content = self._extract_json_from_text(response_text)
+            
+            # Parse the JSON
+            parsed_response = json.loads(json_content)
+            
+            # Extract the steps
+            steps = []
+            if "steps" in parsed_response:
+                steps = parsed_response["steps"]
+            else:
+                # Assume the response itself is an array of steps
+                steps = parsed_response
+            
+            # Validate the steps format
+            validated_steps = self._validate_steps(steps)
+            
+            # Log the generated plan
+            logger.info("Generated plan:")
+            for step in validated_steps:
+                logger.info(f"Step {step.get('step_id')}: {step.get('description')} - Using tool: {step.get('tool')}")
+            
+            return validated_steps
+        except Exception as e:
+            logger.error(f"Error parsing plan: {str(e)}")
+            # Create a fallback minimal plan
+            default_plan = self._create_default_plan(user_query)
+            logger.info("Using default plan due to error:")
+            for step in default_plan:
+                logger.info(f"Step {step.get('step_id')}: {step.get('description')} - Using tool: {step.get('tool')}")
+            return default_plan
+    
+    def _extract_json_from_text(self, text: str) -> str:
+        """Extract JSON object from text string that may contain other content"""
+        # Look for JSON object start and end
+        start_idx = text.find('{')
+        if start_idx == -1:
+            # Try looking for array
+            start_idx = text.find('[')
+            if start_idx == -1:
+                raise ValueError("No JSON object or array found in response")
+        
+        # Count braces to find the matching end
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        
+        for i in range(start_idx, len(text)):
+            char = text[i]
+            
+            # Handle string boundaries
+            if char == '"' and not escape_next:
+                in_string = not in_string
+            
+            # Handle escape sequences
+            if char == '\\' and not escape_next:
+                escape_next = True
+            else:
+                escape_next = False
+            
+            # Count braces outside of strings
+            if not in_string:
+                if char == '{' or char == '[':
+                    brace_count += 1
+                elif char == '}' or char == ']':
+                    brace_count -= 1
+                    
+                    # If we've found the matching end brace
+                    if brace_count == 0:
+                        # Extract the JSON content
+                        json_content = text[start_idx:i+1]
+                        return json_content
+        
+        raise ValueError("Invalid JSON: unclosed braces or brackets")
+    
+    def _validate_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate and clean up the plan steps"""
+        valid_steps = []
+        
+        for step in steps:
+            # Check required fields
+            if not isinstance(step, dict):
+                logger.warning(f"Step is not a dictionary, skipping: {step}")
+                continue
+                
+            if "step_id" not in step:
+                step["step_id"] = len(valid_steps) + 1
+                
+            if "description" not in step:
+                step["description"] = f"Step {step['step_id']}"
+                
+            if "tool" not in step:
+                logger.warning(f"Step missing tool field, skipping: {step}")
+                continue
+                
+            # Verify tool exists
+            tool_name = step["tool"]
+            if tool_name not in AGENT_TOOLS:
+                logger.warning(f"Unknown tool '{tool_name}', skipping step: {step}")
+                continue
+            
+            # Ensure tool_input exists and is a dictionary
+            if "tool_input" not in step or not isinstance(step["tool_input"], dict):
+                step["tool_input"] = {}
+            
+            valid_steps.append(step)
+        
+        # If no valid steps, create a default plan
+        if not valid_steps:
+            logger.warning("No valid steps in plan, creating default plan")
+            return self._create_default_plan("Help me answer my question")
+        
+        return valid_steps
+    
+    def _create_default_plan(self, user_query: str) -> List[Dict[str, Any]]:
+        """Create a simple default plan for when planning fails"""
         return [
             {
                 "step_id": 1,
-                "description": "Extract basic travel information",
-                "tool": "extract_travel_info",
+                "description": "Extract information from user input",
+                "tool": "extract_information",
                 "tool_input": {"user_input": user_query}
             },
             {
                 "step_id": 2,
-                "description": "Search for attractions",
-                "tool": "search_attractions",
-                "tool_input": {
-                    "destination": "{{travel_info.destination}}",
-                    "date": "{{travel_info.date}}"
-                }
+                "description": "Search for relevant information",
+                "tool": "search_web",
+                "tool_input": {"query": user_query}
             },
             {
                 "step_id": 3,
-                "description": "Search for local tips",
-                "tool": "search_local_tips",
+                "description": "Generate comprehensive answer",
+                "tool": "generate_answer",
                 "tool_input": {
-                    "destination": "{{travel_info.destination}}",
-                    "date": "{{travel_info.date}}"
-                }
-            },
-            {
-                "step_id": 4,
-                "description": "Generate daily itinerary",
-                "tool": "generate_daily_itinerary",
-                "tool_input": {
-                    "destination": "{{travel_info.destination}}",
-                    "duration": "{{travel_info.duration}}",
-                    "date": "{{travel_info.date}}",
-                    "customization_hints": "{{travel_info.customization_hints}}",
-                    "attractions": "{{past_steps.search_attractions}}",
-                    "activities": "{{past_steps.search_local_tips}}"
-                }
-            },
-            {
-                "step_id": 5,
-                "description": "Estimate travel budget",
-                "tool": "estimate_budget",
-                "tool_input": {
-                    "destination": "{{travel_info.destination}}",
-                    "duration": "{{travel_info.duration}}",
-                    "date": "{{travel_info.date}}"
+                    "question": user_query,
+                    "search_results": "{{past_steps.search_web}}",
+                    "use_search": True
                 }
             }
         ]
 
 
 class Executor:
-    """Executes steps in a travel plan"""
-
-    def __init__(self, api_key: Optional[str] = None):
-        self.tools = TRAVEL_TOOLS
-
+    """Executes individual steps in the plan"""
+    
+    def __init__(self):
+        """Initialize the executor"""
+        pass
+    
     def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single step in the plan
+        
+        Args:
+            step: Dictionary containing step details
+            
+        Returns:
+            Result of the step execution
+        """
+        # Extract step details
+        tool_name = step.get("tool", "")
+        tool_input = step.get("tool_input", {})
+        description = step.get("description", "")
+        
+        logger.info(f"Executing: {description} using tool '{tool_name}'")
+        
+        # Check if tool exists
+        if tool_name not in AGENT_TOOLS:
+            error_msg = f"Unknown tool: {tool_name}"
+            logger.error(error_msg)
+            return {"error": error_msg}
+        
+        # Get the tool function
+        tool_func = AGENT_TOOLS[tool_name]
+        
         try:
-            tool_name = step.get("tool")
-            tool_input = step.get("tool_input", {})
-            step_id = step.get("step_id", 0)
-
-            if tool_name not in TRAVEL_TOOLS:
-                return {
-                    "step_id": step_id,
-                    "tool": tool_name,
-                    "error": f"Unknown tool: {tool_name}"
-                }
-
-            logger.info(f"Executing {tool_name} with input: {tool_input}")
-            result = TRAVEL_TOOLS[tool_name](**tool_input)
-
-            return {
-                "step_id": step_id,
-                "tool": tool_name,
-                "result": result
-            }
+            # Execute the tool
+            result = tool_func(**tool_input)
+            
+            logger.info(f"Step execution completed: {description}")
+            return result
         except Exception as e:
-            logger.error(f"Error executing {step.get('tool', 'unknown')}: {str(e)}")
-            return {
-                "step_id": step.get("step_id", 0),
-                "tool": step.get("tool", "unknown"),
-                "error": str(e)
-            }
+            error_msg = f"Error executing {tool_name}: {str(e)}"
+            logger.error(error_msg)
+            return {"error": error_msg}
 
 
 class Replanner:
-    """Re-evaluates the plan based on execution results"""
-
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key_str = api_key or config.OPENROUTER_API_KEY
-        if not self.api_key_str:
-            raise ValueError("Replanner requires OpenAI API Key")
-
+    """Handles replanning when the original plan fails"""
+    
+    def __init__(self):
+        """Initialize the replanner"""
         self.llm = ChatOpenAI(
             model=config.LLM_MODEL,
-            temperature=0.2,
-            api_key=SecretStr(self.api_key_str),
+            api_key=config.OPENROUTER_API_KEY,
             base_url="https://openrouter.ai/api/v1"
         )
-
-    def replan(
-        self,
-        user_input: str,
-        original_plan: List[Dict[str, Any]],
-        executed_steps: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Re-evaluate the plan based on execution results
-
+        self.planner = Planner()
+    
+    def create_new_plan(self, 
+                       user_query: str, 
+                       extracted_info: Dict[str, Any],
+                       past_steps: List[Dict[str, Any]],
+                       error_message: str,
+                       current_step_index: int) -> Dict[str, Any]:
+        """Create a new plan when the current plan fails
+        
         Args:
-            user_input: Original user request
-            original_plan: The plan steps that were created
-            executed_steps: Results from executed steps so far
-
+            user_query: User's original request
+            extracted_info: Information extracted from user's request
+            past_steps: Results of steps executed so far
+            error_message: Error message from the failed step
+            current_step_index: Index of the failed step
+            
         Returns:
-            Dictionary with action to take and optional new plan or response
+            Dictionary containing the new plan
         """
-        logger.info("Re-evaluating plan based on execution results")
-        
-        # Format the plans and results for the prompt
-        original_plan_str = "\n".join([
-            f"{step.get('step_id', i+1)}. {step.get('description', 'Step')} (using {step.get('tool', 'unknown')})"
-            for i, step in enumerate(original_plan)
-        ])
-        
-        executed_steps_str = "\n".join([
-            f"Step {result.get('step_id')}: " +
-            (f"ERROR: {result.get('error')}" if 'error' in result else
-             # Limit result string length
-             f"Success - {str(result.get('result'))[:100]}...")
-            for result in executed_steps
-        ])
-        
-        replan_template = PromptTemplate.from_template("""
-        You are a travel planning assistant. Review the original plan and execution
-        results to decide what to do next:
+        # Analyze the error and create a replan prompt
+        prompt = f"""You are an AI assistant tasked with creating a new plan to fulfill a user's request
+after the original plan encountered an error.
 
-        USER REQUEST: {user_input}
+USER REQUEST: {user_query}
 
-        ORIGINAL PLAN:
-        {original_plan}
+EXTRACTED INFORMATION:
+{json.dumps(extracted_info, indent=2)}
 
-        EXECUTION RESULTS:
-        {executed_steps}
+STEPS EXECUTED SO FAR:
+{json.dumps(past_steps, indent=2)}
 
-        Based on these results, choose ONE of the following actions:
-        1. CONTINUE with the current plan
-        2. UPDATE the plan (provide a new plan)
-        3. COMPLETE the planning (provide a final response)
+ERROR ENCOUNTERED:
+{error_message}
 
-        IMPORTANT: You should only choose COMPLETE when either all steps have been executed
-        or you have at least executed the travel information extraction, attractions search,
-        and daily itinerary generation. Budget estimation is especially important and should
-        not be skipped.
+Create a new plan that avoids the error and fulfills the user's request.
+The plan should be a sequence of steps that use these available tools:
+- extract_information: Extract information from text
+- search_web: Search the web for information
+- generate_answer: Generate a comprehensive answer to a question
+- analyze_with_llm: Analyze text using a language model with specific instructions
+- summarize_information: Create a coherent summary from multiple texts
+- categorize_user_request: Categorize the type of request the user is making
 
-        Respond with structured JSON data:
-        {{
-            "action": "continue"|"update"|"complete",
-            "plan": [ /* New plan steps if action is "update" */ ],
-            "response": "Final response if action is complete"
-        }}
+Return a JSON object with the key "plan" containing an array of steps. Each step should have:
+1. step_id: A unique number
+2. description: A clear description of the step
+3. tool: The name of the tool to use
+4. tool_input: Parameters for the tool
 
-        Analyze the executed steps carefully. If a step failed (e.g., search error),
-        consider if replanning is needed or if you can complete with available info.
-        """)
+Format:
+{{
+  "plan": [
+    {{ "step_id": 1, "description": "...", "tool": "...", "tool_input": {{ ... }} }},
+    ...
+  ]
+}}
+"""
         
         try:
-            # Use manual JSON parsing instead of structured output
-            response = self.llm.invoke(
-                replan_template.format(
-                    user_input=user_input,
-                    original_plan=original_plan_str,
-                    executed_steps=executed_steps_str
-                )
-            )
+            # Generate new plan
+            response = self.llm.invoke(prompt)
+            response_text = response.content
             
-            # Extract JSON string - more robust parsing method
-            logger.info("Received replanning response, parsing JSON")
-            response_text = response.content if hasattr(response, "content") else str(response)
+            # Parse the JSON
+            json_content = self.planner._extract_json_from_text(response_text)
+            parsed_response = json.loads(json_content)
             
-            # Try multiple ways to parse JSON
-            output = None
+            # Extract the plan
+            if "plan" in parsed_response:
+                new_plan = parsed_response["plan"]
+                logger.info(f"Created new plan with {len(new_plan)} steps")
+                return {"plan": self.planner._validate_steps(new_plan)}
+            else:
+                # Create a simple plan that completes the task
+                logger.warning("Replan didn't return a 'plan' key, using default")
+                return {"plan": self.planner._create_default_plan(user_query)}
             
-            # Try to parse the entire response directly
-            try:
-                logger.info("Attempting direct JSON parse")
-                output = json.loads(response_text)
-            except json.JSONDecodeError:
-                logger.info("Direct JSON parse failed, trying to extract JSON")
-                import re
-                
-                # Try to extract JSON object from text
-                json_pattern = r'(\{[\s\S]*\})'
-                match = re.search(json_pattern, response_text)
-                if match:
-                    try:
-                        json_str = match.group(1)
-                        logger.info(f"Extracted JSON: {json_str[:50]}...")
-                        output = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        logger.warning("Extracted JSON is still invalid")
-                
-                # Try to extract from markdown code block
-                if not output:
-                    code_block_pattern = r'```(?:json)?\s*([\s\S]*?)\s*```'
-                    match = re.search(code_block_pattern, response_text)
-                    if match:
-                        try:
-                            json_str = match.group(1)
-                            logger.info(f"Extracted code block: {json_str[:50]}...")
-                            output = json.loads(json_str)
-                        except json.JSONDecodeError:
-                            logger.warning("Code block JSON is invalid")
-            
-            # If all parsing methods fail, use default continue action
-            if not output:
-                logger.error(f"All JSON parsing attempts failed during replanning")
-                return {"action": "continue"}
-            
-            # Validate and process the parsed output
-            if "action" not in output:
-                logger.error("Parsed JSON missing 'action' field")
-                return {"action": "continue"}
-            
-            action = output.get("action", "").lower()
-            
-            if action == "update":
-                plan = output.get("plan")
-                
-                # Handle special case where plan is a list of strings
-                if isinstance(plan, list):
-                    # Check if first element is a string, if so attempt to convert the entire list
-                    if len(plan) > 0 and isinstance(plan[0], str):
-                        logger.warning("Plan is a list of strings, attempting to convert to proper format")
-                        try:
-                            # Try to parse each string element and create proper steps
-                            converted_plan = []
-                            for i, step_str in enumerate(plan):
-                                # Remove possible numbering and prefixes
-                                clean_str = re.sub(r'^[0-9]+[.:]?\s*', '', step_str)
-                                
-                                # Extract tool name and description
-                                tool_match = re.search(r'(?:using|with)\s+([a-z_]+)', step_str, re.IGNORECASE)
-                                tool_name = tool_match.group(1) if tool_match else "unknown_tool"
-                                
-                                # Create basic step
-                                converted_step = {
-                                    "step_id": i + 1,
-                                    "description": clean_str,
-                                    "tool": tool_name,
-                                    "tool_input": {}
-                                }
-                                
-                                # Add default parameters based on tool type
-                                if tool_name == "extract_travel_info":
-                                    converted_step["tool_input"] = {"user_input": "{{travel_info.user_query}}"}
-                                elif tool_name in ["search_attractions", "search_local_tips", "search_accommodations"]:
-                                    converted_step["tool_input"] = {
-                                        "destination": "{{travel_info.destination}}",
-                                        "date": "{{travel_info.date}}"
-                                    }
-                                elif tool_name == "generate_daily_itinerary":
-                                    converted_step["tool_input"] = {
-                                        "destination": "{{travel_info.destination}}",
-                                        "duration": "{{travel_info.duration}}",
-                                        "date": "{{travel_info.date}}",
-                                        "customization_hints": "{{travel_info.customization_hints}}",
-                                        "attractions": "{{past_steps.search_attractions}}",
-                                        "activities": "{{past_steps.search_local_tips}}"
-                                    }
-                                elif tool_name == "estimate_budget":
-                                    converted_step["tool_input"] = {
-                                        "destination": "{{travel_info.destination}}",
-                                        "duration": "{{travel_info.duration}}",
-                                        "date": "{{travel_info.date}}"
-                                    }
-                                
-                                converted_plan.append(converted_step)
-                                
-                            if converted_plan:
-                                logger.info(f"Successfully converted string list to {len(converted_plan)} plan steps")
-                                plan = converted_plan
-                        except Exception as e:
-                            logger.error(f"Error converting string list to plan: {str(e)}")
-                            # Fall back to default plan
-                            plan = None
-                
-                if not plan or not isinstance(plan, list) or len(plan) == 0:
-                    logger.error("Action is 'update' but plan is missing, invalid, or empty")
-                    return {"action": "continue"}
-                
-                # Validate that each step contains necessary fields
-                for i, step in enumerate(plan):
-                    if not isinstance(step, dict):
-                        logger.warning(f"Step {i+1} is not a dictionary, skipping validation")
-                        continue
-                        
-                    # Ensure each step has necessary fields
-                    if "tool" not in step:
-                        logger.warning(f"Step {i+1} missing 'tool', adding default")
-                        step["tool"] = "unknown_tool"
-                    
-                    if "tool_input" not in step or not isinstance(step["tool_input"], dict):
-                        logger.warning(f"Step {i+1} missing 'tool_input', adding empty dict")
-                        step["tool_input"] = {}
-                    
-                    if "step_id" not in step:
-                        step["step_id"] = i + 1
-                        
-                    if "description" not in step:
-                        step["description"] = f"Step using {step['tool']}"
-                
-                logger.info(f"Replanner decided to update the plan with {len(plan)} steps")
-                return {"action": "update", "plan": plan}
-            elif action == "complete":
-                response_text = output.get("response")
-                if not response_text or not isinstance(response_text, str):
-                    logger.error("Action is 'complete' but response is missing or not a string")
-                    return {"action": "continue"}
-                logger.info("Replanner decided to complete with final response")
-                return {"action": "complete", "response": response_text}
-            else:  # continue or any other value
-                logger.info("Replanner decided to continue with current plan")
-                return {"action": "continue"}
-                
         except Exception as e:
-            logger.error(f"Error during replanning: {str(e)}. Defaulting to continue.")
-            return {"action": "continue"}
+            logger.error(f"Error creating new plan: {str(e)}")
+            return {"plan": self.planner._create_default_plan(user_query)}

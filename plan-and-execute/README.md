@@ -1,111 +1,134 @@
-# Travel Planning Assistant
+# Plan-and-Execute AI Agent
 
-An intelligent travel planning assistant based on the Plan-and-Execute pattern, capable of automatically generating complete travel plans from simple user inputs, including destination recommendations, itinerary arrangements, and budget estimates.
+A general-purpose AI agent that uses the Plan-and-Execute pattern to answer questions and solve problems.
 
-## Project Architecture
+## Overview
 
-This project adopts the Plan-and-Execute pattern, using LangGraph for workflow management. Core components include:
+This repository implements a framework for a general-purpose AI agent that:
 
-```
-┌───────────────┐      ┌───────────────┐      ┌───────────────┐
-│   Planner     │──────▶   Executor    │──────▶   Replanner   │
-└───────────────┘      └───────────────┘      └───────────────┘
-```
+1. Takes a user's question or request
+2. Breaks it down into a sequence of steps using LLM planning
+3. Executes the steps in order, gathering information as needed
+4. Synthesizes the results into a coherent response
 
-- **Planner**: Generates travel plan steps based on user input
-- **Executor**: Executes each plan step, calling the appropriate tool functions
-- **Replanner**: Analyzes execution results, decides whether to continue executing, modify the plan, or complete the output
+The agent uses LangGraph for workflow management and can handle a wide variety of queries by dynamically creating execution plans tailored to each request.
 
-### Core File Structure
+## Features
 
-- `travel_graph.py`: Main workflow management, implements state graph and node logic
-- `planner_engine.py`: Contains specific implementations of Planner, Executor, and Replanner
-- `travel_tools.py`: Various travel tool functions such as information extraction, attraction search, budget estimation, etc.
-- `information_extractor.py`: Extracts travel information from user input
-- `search_engine.py`: Search engine interface for obtaining real travel data
-- `prompt_templates.py`: Prompt template library for generating high-quality LLM prompts
-- `config.py`: System configuration
-- `run_travel_app.py`: Main entry program
+- **Dynamic Planning**: Creates custom execution plans for each user query
+- **Web Search Integration**: Searches the web for relevant information
+- **Information Extraction**: Identifies key entities and themes in user queries
+- **Answer Generation**: Synthesizes information into coherent, comprehensive answers
+- **Error Handling**: Detects failures and replans when necessary
+- **Time Awareness**: Includes current date/time information to maintain temporal context
+- **Fact Verification**: Uses a hardcoded facts database for key information like political leaders
+- **Data Consistency**: Identifies and flags conflicting information in search results
+- **Structured Parsing**: Employs robust key-value extraction for consistent information processing
 
-## Technology Stack
+## Getting Started
 
-- **LangGraph**: LangChain-based workflow engine for building Plan-and-Execute processes
-- **OpenAI**: Uses the GPT-4o model for natural language understanding and generation
-- **Tavily API**: For real-time search of travel information and price data
-- **LangSmith**: For tracking and monitoring LLM applications
-- **Python**: Core development language, version 3.9+
+### Prerequisites
 
-## Installation Guide
+- Python 3.8+
+- OpenRouter API key (or OpenAI API key)
+- Tavily API key (for search functionality)
 
-1. Clone the repository
+### Installation
 
-```bash
-git clone <repository-url>
-cd travel-plan-assistant
-```
+1. Clone this repository
+2. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. Copy the `.env.example` file to `.env` and add your API keys:
+   ```
+   cp .env.example .env
+   # Edit .env file to add your API keys
+   ```
 
-2. Create and activate a virtual environment
+### Usage
 
-```bash
-python -m venv venv
-# Windows
-venv\Scripts\activate
-# Linux/Mac
-source venv/bin/activate
-```
-
-3. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-4. Configure environment variables
-   Copy `.env.example` to `.env`, and fill in the following API keys:
+Run the agent with:
 
 ```
-LANGSMITH_TRACING=true
-LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
-LANGSMITH_API_KEY="your_langsmith_api_key_here"
-LANGSMITH_PROJECT="travel-plan-assistant"
-
-OPENAI_API_KEY="your_openai_api_key_here"
-TAVILY_API_KEY="your_tavily_api_key_here"
+python run_app.py
 ```
 
-## Usage Instructions
+Then enter your question when prompted.
 
-Run the main program:
+## How It Works
 
-```bash
-python run_travel_app.py
-```
+The agent follows the Plan-and-Execute pattern using a structured workflow:
 
-Input examples:
+1. **Planning**: When a user submits a query, the planner breaks it down into steps
+2. **Execution**: Each step is executed in sequence, using tools like:
+   - Information extraction
+   - Web search
+   - Text analysis
+   - Answer generation
+3. **Replanning**: If a step fails, the agent replans to work around the failure
+4. **Response Generation**: Results are synthesized into a final answer
 
-- "Seattle, sakura, 3 days"
-- "beach vacation in Miami"
-- "safari for 7 days"
-- "gray"
+## Architecture
 
-The system will automatically:
+The system consists of several key components:
 
-1. Extract travel information (destination, duration, date, custom requirements)
-2. Search for popular attractions
-3. Generate daily itinerary
-4. Estimate travel budget
-5. Provide a complete travel plan
+- **AgentGraph**: The core workflow manager that orchestrates the plan-and-execute pattern
+- **Planner**: Creates execution plans for user queries
+- **Executor**: Runs individual steps in the plan
+- **Replanner**: Handles failures by creating new plans
+- **Agent Tools**: Collection of functions that perform specific tasks:
+  - `extract_information`: Identifies key entities and concepts using key-value format
+  - `search_web`: Searches for information on the web
+  - `generate_answer`: Creates comprehensive answers with fact verification
+  - `analyze_with_llm`: Analyzes text with specific instructions
+  - `summarize_information`: Synthesizes multiple texts
+  - `categorize_user_request`: Categorizes the type of request
 
-## Key Features
+## Advanced Features
 
-- **Intelligent Information Extraction**: Even with vague user inputs (like "pink"), the system can intelligently infer reasonable travel arrangements
-- **Real-time Price Estimation**: Obtains real travel price data through the search engine
-- **Dynamic Itinerary Generation**: Automatically generates reasonable daily itinerary arrangements based on destination and duration
-- **Error Handling and Recovery**: Even if certain steps fail, the system can still provide reasonable travel recommendations
+### Fact Verification Database
 
-## Configuration Parameters
+The system includes a hardcoded facts database (`FACTS_DB`) that contains verified information about key topics like political leaders. This helps ensure accurate responses even when search results contain outdated or conflicting information.
 
-The following parameters can be adjusted in `config.py`:
+### Time Awareness
 
-- `DEBUG`: Set to False to hide system execution process logs, showing only the final travel plan results
-- `LLM_MODEL`: Choose the LLM model to use, default is "gpt-4o"
+The agent maintains awareness of the current date and time, allowing it to:
+
+- Properly contextualize "current" events
+- Flag potentially outdated information
+- Indicate when information may be speculative (future-dated)
+
+### Robust Information Extraction
+
+Information extraction uses a reliable key-value format that is:
+
+- More robust than JSON parsing
+- Less prone to syntax errors
+- Easier to extract partial information
+- More consistently produced by LLMs
+
+### Data Consistency Checking
+
+The system detects conflicting information in search results and:
+
+- Flags potential inconsistencies to the user
+- Prioritizes verified facts from the facts database
+- Provides appropriate caveats when information reliability is uncertain
+
+## Extending the Agent
+
+You can extend the agent by adding new tools:
+
+1. Create a new function in `agent_tools.py`
+2. Add it to the `AGENT_TOOLS` dictionary
+3. The planner will automatically be able to use your new tool
+
+## License
+
+[MIT License](LICENSE)
+
+## Acknowledgments
+
+- Built with [LangGraph](https://github.com/langchain-ai/langgraph)
+- Uses [Tavily](https://tavily.com/) for web search
