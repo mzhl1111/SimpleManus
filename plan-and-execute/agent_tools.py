@@ -16,40 +16,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 初始化搜索引擎实例
+# Initialize search engine instance
 search_engine_instance = SearchEngine(api_key=config.TAVILY_API_KEY)
 
-# 硬编码的事实数据库 - 包含关键国家领导人信息
-# 这些数据将优先于搜索引擎返回的信息
-FACTS_DB = {
-    "countries": {
-        "canada": {
-            "political_system": "constitutional monarchy with parliamentary democracy",
-            "head_of_state": "King Charles III (monarch)",
-            "head_of_government": "Justin Trudeau (Prime Minister)",
-            "has_president": False,
-            "notes": "Canada has no president. The Prime Minister is the head of government."
-        },
-        "united states": {
-            "political_system": "constitutional federal republic",
-            "head_of_state": "Donald Trump (President)",
-            "head_of_government": "Donald Trump (President)",
-            "has_president": True,
-            "notes": "The President is both head of state and head of government."
-        },
-        "united kingdom": {
-            "political_system": "constitutional monarchy with parliamentary democracy",
-            "head_of_state": "King Charles III (monarch)",
-            "head_of_government": "Rishi Sunak (Prime Minister)",
-            "has_president": False,
-            "notes": "The UK has no president. The Prime Minister is the head of government."
-        }
-    }
-}
-
-# 获取当前实际日期时间
+# Get current actual date and time
 def get_current_date():
-    """获取当前日期与时间信息"""
+    """Get current date and time information"""
     now = datetime.datetime.now()
     return {
         "current_date": now.strftime("%Y-%m-%d"),
@@ -105,7 +77,7 @@ def generate_answer(
     """
     logger.info(f"Generating answer for '{question}'")
     
-    # 获取当前日期信息
+    # Get current date information
     current_date_info = get_current_date()
     logger.info(f"Current date context: {current_date_info['formatted_date']}")
     
@@ -113,27 +85,6 @@ def generate_answer(
     context = f"Question: {question}\n\n"
     context += f"Current date: {current_date_info['formatted_date']}\n\n"
     
-    # 检查问题是否涉及国家领导人
-    question_lower = question.lower()
-    fact_based_answer = None
-    
-    for country, data in FACTS_DB["countries"].items():
-        if country in question_lower:
-            if ("president" in question_lower and not data["has_president"]):
-                fact_based_answer = data["notes"]
-                context += f"FACTUAL CORRECTION: {fact_based_answer}\n\n"
-            elif "president" in question_lower and data["has_president"]:
-                fact_based_answer = f"The current President of {country.title()} is {data['head_of_state']}."
-                context += f"VERIFIED FACT: {fact_based_answer}\n\n"
-            elif "prime minister" in question_lower or "premier ministre" in question_lower:
-                if "head_of_government" in data and "Prime Minister" in data["head_of_government"]:
-                    fact_based_answer = f"The current Prime Minister of {country.title()} is {data['head_of_government'].split('(')[0].strip()}."
-                    context += f"VERIFIED FACT: {fact_based_answer}\n\n"
-            elif "leader" in question_lower or "head of state" in question_lower:
-                context += f"VERIFIED FACT: The political system of {country.title()} is {data['political_system']}.\n"
-                context += f"VERIFIED FACT: The head of state is {data['head_of_state']}.\n"
-                context += f"VERIFIED FACT: The head of government is {data['head_of_government']}.\n\n"
-                
     search_data = []
     
     # If search_results is a string reference or None, perform a new search
@@ -141,7 +92,8 @@ def generate_answer(
         try:
             logger.info(f"Performing search for: {question}")
             search_data = search_engine_instance.search(question)
-            logger.info(f"Web search for '{question}' found {len(search_data)} results")
+            search_results_count = len(search_data)
+            logger.info(f"Web search for '{question}' found {search_results_count} results")
         except Exception as e:
             logger.error(f"Error searching: {str(e)}")
             search_data = []
@@ -151,51 +103,14 @@ def generate_answer(
     
     # Data validation and fact checking
     has_conflicting_data = False
-    leadership_mentions = {} # 追踪所有提及的领导人及其职位
-    dates_mentioned = []
-    
-    # Extract and validate key entities from search results
-    for result in search_data:
-        if isinstance(result, dict) and 'content' in result:
-            content = result['content'].lower()
-            title = result.get('title', '').lower()
-            
-            # 检查领导职位相关信息
-            if any(term in question.lower() for term in ['president', 'prime minister', 'leader']):
-                # 检查加拿大相关信息
-                if 'canada' in question.lower() or 'canadian' in question.lower():
-                    # 收集提及的领导人
-                    if 'prime minister' in content or 'premier ministre' in content:
-                        if any(name in content for name in ['justin trudeau', 'trudeau']):
-                            if 'prime minister' not in leadership_mentions:
-                                leadership_mentions['prime minister'] = []
-                            leadership_mentions['prime minister'].append('Justin Trudeau')
-                        if any(name in content for name in ['mark carney', 'carney']):
-                            if 'prime minister' not in leadership_mentions:
-                                leadership_mentions['prime minister'] = []
-                            leadership_mentions['prime minister'].append('Mark Carney')
-                    if 'president' in content:
-                        if 'president' not in leadership_mentions:
-                            leadership_mentions['president'] = []
-                        leadership_mentions['president'].append('N/A - Canada has no president')
-            
-            # Extract dates if present
-            import re
-            year_matches = re.findall(r'\b(19|20)\d{2}\b', content)
-            for year in year_matches:
-                year = int(year)
-                if 1990 <= year <= current_date_info['current_year']:
-                    dates_mentioned.append(year)
+    leadership_mentions = {}  # Track all mentioned leaders and their positions
     
     # Check for conflicting information
     for position, names in leadership_mentions.items():
         if len(set(names)) > 1 and position != 'president':
             has_conflicting_data = True
-            logger.warning(f"Conflicting {position} information detected: {set(names)}")
-    
-    # Add country-specific factual corrections
-    if 'canada' in question.lower() and 'president' in question.lower():
-        context += "Factual correction: Canada does not have a president. Canada has a Prime Minister as head of government and is a constitutional monarchy with King Charles III as head of state.\n\n"
+            msg = f"Conflicting {position} information detected: {set(names)}"
+            logger.warning(msg)
     
     # Add search results to context with source information
     if search_data:
@@ -214,7 +129,8 @@ def generate_answer(
     
     # Add warning about conflicting data if detected
     if has_conflicting_data:
-        context += "\nNote: The search results contain potentially conflicting information. Please verify the most current data.\n\n"
+        context += "\nNote: The search results contain potentially conflicting "
+        context += "information. Please verify the most current data.\n\n"
     
     # Initialize LLM
     llm = ChatOpenAI(
@@ -226,30 +142,26 @@ def generate_answer(
     
     # Create chat template with current date information
     current_year = current_date_info['current_year']
-    current_month = current_date_info['formatted_date'].split()[0]  # e.g., "April"
+    current_month = current_date_info['formatted_date'].split()[0]
     
+    date_str = current_date_info['formatted_date']
     chat_template = ChatPromptTemplate.from_messages([
-        ("system", f"""You are a helpful AI assistant that provides accurate, comprehensive answers based on the provided information.
+        ("system", f"""You are a helpful AI assistant that provides accurate and timely 
+information based on search results.
+Current date context: {date_str}
 
-Today's date is {current_date_info['formatted_date']}.
+Always be accurate, helpful, harmless, and honest. When search results contain conflicting 
+information, acknowledge the conflict and provide the most likely accurate information. 
+If no search results are available or they don't answer the question, acknowledge this 
+limitation.
 
-Your task is to answer the question using ONLY the information provided in the search results.
-If the search results don't contain enough information to fully answer the question, acknowledge this limitation.
-If the search results contain conflicting information, acknowledge this and provide the most likely correct answer based on the most recent or authoritative sources.
+For questions about specific dates, times, or current events, be sure to reference the 
+current date ({date_str}) in your reasoning.
 
-For questions about current political figures or other time-sensitive information:
-1. Pay careful attention to dates mentioned in the sources
-2. Ensure your answer reflects the most current information available in the sources
-3. If sources conflict about who currently holds a position, clearly state this conflict
-4. If information appears to be from the future (dates after {current_date_info['formatted_date']}), treat it as speculative and note this in your answer
-
-For Canada-specific questions:
-- Canada does not have a president. It has a Prime Minister.
-- As of {current_month} {current_year}, the Prime Minister of Canada is Justin Trudeau (based on definitive public records).
-- Any information suggesting a change in leadership should be verified against multiple authoritative sources.
-
-Your response should be well-structured, informative, and directly address the question.
-Include specific facts from the search results, but avoid unnecessary details."""),
+Based only on the context provided below, answer the user's question thoroughly and 
+accurately. If the information in the context is insufficient, clearly state that you 
+don't have enough information rather than making assumptions.
+        """),
         ("user", "{context}")
     ])
     
@@ -265,7 +177,9 @@ Include specific facts from the search results, but avoid unnecessary details.""
         
     except Exception as e:
         logger.error(f"Error generating answer: {str(e)}")
-        return f"I'm sorry, but I encountered an error while trying to answer your question. {str(e)}"
+        err_msg = f"I'm sorry, but I encountered an error while trying to answer your "
+        err_msg += f"question. {str(e)}"
+        return err_msg
 
 def analyze_with_llm(user_input: str, instruction: str) -> Dict[str, Any]:
     """Analyze user input using the LLM with specific instructions"""

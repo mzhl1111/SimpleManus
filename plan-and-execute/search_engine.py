@@ -76,9 +76,3 @@ class SearchEngine:
         except Exception as e:
             logger.error(f"Search error: {str(e)}")
             return []
-    
-    # Remove search_with_query_generation method
-    # def search_with_query_generation(...): ...
-    
-    # Remove search_and_summarize method
-    # def search_and_summarize(...): ... 

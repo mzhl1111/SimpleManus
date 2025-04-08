@@ -41,7 +41,7 @@ class InformationExtractor:
             ("system", """You are an information extraction expert.
 Extract clearly provided information from the user's input.
 
-⚠️ Important! You must respond strictly in the following key-value format, one per line, without any additional text:
+WARNING: Important! You must respond strictly in the following key-value format, one per line, without any additional text:
 
 ENTITIES: entity1, entity2, ...
 FOCUS_AREA: extracted focus or 'Not provided'

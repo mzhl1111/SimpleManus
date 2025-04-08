@@ -15,15 +15,12 @@ The agent uses LangGraph for workflow management and can handle a wide variety o
 
 ## Features
 
-- **Dynamic Planning**: Creates custom execution plans for each user query
-- **Web Search Integration**: Searches the web for relevant information
-- **Information Extraction**: Identifies key entities and themes in user queries
-- **Answer Generation**: Synthesizes information into coherent, comprehensive answers
-- **Error Handling**: Detects failures and replans when necessary
-- **Time Awareness**: Includes current date/time information to maintain temporal context
-- **Fact Verification**: Uses a hardcoded facts database for key information like political leaders
-- **Data Consistency**: Identifies and flags conflicting information in search results
-- **Structured Parsing**: Employs robust key-value extraction for consistent information processing
+- **Plan-and-Execute Architecture**: Creates detailed plans for addressing user requests, then executes them step by step
+- **Real-time Web Search**: Uses Tavily API to retrieve up-to-date information
+- **Extraction and Analysis**: Pulls relevant details from user input
+- **Smart Error Handling**: Detects and recovers from failures by replanning
+- **Conflict Resolution**: Identifies and manages conflicting information from sources
+- **Tool System**: Flexible toolkit of specialized components for different tasks
 
 ## Getting Started
 
@@ -87,34 +84,24 @@ The system consists of several key components:
 
 ## Advanced Features
 
-### Fact Verification Database
+### Information Processing
 
-The system includes a hardcoded facts database (`FACTS_DB`) that contains verified information about key topics like political leaders. This helps ensure accurate responses even when search results contain outdated or conflicting information.
+The system performs several key information handling tasks:
 
-### Time Awareness
+1. **Extraction**: Pulls structured data from user inputs, recognizing:
 
-The agent maintains awareness of the current date and time, allowing it to:
+   - Key entities
+   - Timeframes
+   - Special constraints
+   - User intent and focus areas
 
-- Properly contextualize "current" events
-- Flag potentially outdated information
-- Indicate when information may be speculative (future-dated)
+2. **Search and Retrieval**: Performs targeted web searches to get the most current information
 
-### Robust Information Extraction
+3. **Verification and Integration**: Compares information from multiple sources to identify potential conflicts
 
-Information extraction uses a reliable key-value format that is:
+4. **Contextual Analysis**: Considers the current date when evaluating time-sensitive information
 
-- More robust than JSON parsing
-- Less prone to syntax errors
-- Easier to extract partial information
-- More consistently produced by LLMs
-
-### Data Consistency Checking
-
-The system detects conflicting information in search results and:
-
-- Flags potential inconsistencies to the user
-- Prioritizes verified facts from the facts database
-- Provides appropriate caveats when information reliability is uncertain
+5. **Structured Response Generation**: Creates comprehensive answers that directly address the user's query
 
 ## Extending the Agent
 
