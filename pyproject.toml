@@ -20,7 +20,8 @@ dependencies = [
     "pytest-playwright (>=0.7.0,<0.8.0)",
     "markdown (>=3.7,<4.0)",
     "pdfkit (>=1.0.0,<2.0.0)",
-    "pypandoc (>=1.15,<2.0)"
+    "pypandoc (>=1.15,<2.0)",
+    "mlflow (>=2.21.3,<3.0.0)"
 ]
 
 

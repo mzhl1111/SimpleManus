@@ -2,6 +2,8 @@ import asyncio
 import base64
 import json
 from typing import Generic, Optional, TypeVar
+
+from langchain_core.tools import Tool
 from pydantic import BaseModel, ConfigDict
 
 from browser_use import Browser as BrowserUseBrowser
@@ -115,8 +117,9 @@ class BrowserUseTool(BaseModel, Generic[Context]):
             return output
         except Exception as e:
             return f"click element Error {str(e)}"
+
     def click_element(self, index):
-        return asyncio.run(self._click_element_node(index))\
+        return asyncio.run(self._click_element_node(index))
 
     async def a_input_text(self, index, text):
         if index is None or not text:
@@ -300,9 +303,9 @@ class BrowserUseTool(BaseModel, Generic[Context]):
                 "title": state.title,
                 "tabs": [tab.model_dump() for tab in state.tabs],
                 "help": "[0], [1], [2], etc., represent clickable indices corresponding to the elements listed. Clicking on these indices will navigate to or interact with the respective content behind them.",
-                "interactive_elements": (
-                    state.element_tree.clickable_elements_to_string()
-                    if state.element_tree
+                "interactive_elements_with_index": (
+                    [f"INDEX[{k}]: {v.clickable_elements_to_string()}" for k, v in state.selector_map.items()]
+                    if state.selector_map
                     else ""
                 ),
                 "scroll_info": {
@@ -398,3 +401,110 @@ def search_function(query: str, num_results: int = 10) -> str:
 
     links = asyncio.run(fetch_results())
     return f"Searched result links: {', '.join(links)}"
+
+
+def get_browser_use_tools(llm):
+    browser_tool = BrowserUseTool(llm=llm)
+    return [
+        Tool(
+            name="Search",
+            func=search_function,
+            description="Useful for searching the internet for current information."
+        ),
+        # Tool(
+        #     name="Wait",
+        #     func=wait,
+        #     content="Wait for {input} seconds for other executing actions"
+        #
+        Tool(
+            name="go_to_url",
+            func=browser_tool.go_to_url,
+            coroutine=browser_tool.a_go_to_url,
+            description="Navigate to a specific URL in the browser. **Required:** url (string)."
+        ),
+        Tool(
+            name="go_back",
+            func=browser_tool.go_back,
+            coroutine=browser_tool.a_go_back,
+            description="Navigate back to the previous page. **No additional parameters required.**"
+        ),
+        Tool(
+            name="click_element",
+            func=browser_tool.click_element,
+            coroutine=browser_tool.a_click_element,
+            description="Click an element in the webpage identified by its index. **Required:** index (integer)."
+        ),
+        Tool(
+            name="input_text",
+            func=browser_tool.input_text,
+            coroutine=browser_tool.a_input_text,
+            description="Input text into a form element. **Required:** index (integer), text (string)."
+        ),
+
+        Tool(
+            name="scroll_down",
+            func=browser_tool.scroll_down,
+            coroutine=browser_tool.a_scroll_down,
+            description="Scroll down by a specified amount of pixels. **Required:** scroll_amount (integer)."
+        ),
+        Tool(
+            name="scroll_up",
+            func=browser_tool.scroll_up,
+            coroutine=browser_tool.a_scroll_up,
+            description="Scroll up by a specified amount of pixels. **Required:** scroll_amount (integer)."
+        ),
+        Tool(
+            name="scroll_to_text",
+            func=browser_tool.scroll_to_text,
+            coroutine=browser_tool.a_scroll_to_text,
+            description="Scroll to a specific text on the page. **Required:** text (string)."
+        ),
+        Tool(
+            name="get_dropdown_options",
+            func=browser_tool.get_dropdown_options,
+            coroutine=browser_tool.a_get_dropdown_options,
+            description="Retrieve all dropdown options for a given element. **Required:** index (integer)."
+        ),
+        Tool(
+            name="select_dropdown_option",
+            func=browser_tool.select_dropdown_option,
+            coroutine=browser_tool.a_select_dropdown_option,
+            description="Select a dropdown option based on visible text. **Required:** index (integer), text (string)."
+        ),
+        Tool(
+            name="extract_content",
+            func=browser_tool.extract_content,
+            coroutine=browser_tool.a_extract_content,
+            description="Extract specific information from a webpage. **Required:** goal (string, describing what to extract)."
+        ),
+        Tool(
+            name="get_current_state",
+            func=browser_tool.get_current_state,
+            coroutine=browser_tool.a_get_current_state,
+            description="Retrieve the current browser state. ALWAYS use this tool to get dom element index before using click or dropdown tools. **No additional parameters required.**"
+        ),
+        Tool(
+            name="switch_tab",
+            func=browser_tool.switch_tab,
+            coroutine=browser_tool.a_switch_tab,
+            description="Switch to a specific tab using its ID. **Required:** tab_id (integer)."
+        ),
+        Tool(
+            name="open_tab",
+            func=browser_tool.open_tab,
+            coroutine=browser_tool.a_open_tab,
+            description="Open a new tab with a given URL. **Required:** url (string)."
+        ),
+        Tool(
+            name="close_tab",
+            func=browser_tool.close_tab,
+            coroutine=browser_tool.a_close_tab,
+            description="Close the current tab. **No additional parameters required.**"
+        ),
+        Tool(
+            name="wait",
+            func=browser_tool.wait,
+            coroutine=browser_tool.a_wait,
+            description="Pause execution for a specified duration. **Required:** seconds (integer)."
+        )
+    ]

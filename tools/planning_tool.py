@@ -1,6 +1,7 @@
 # tool/planning.py
 from typing import Dict, List, Literal, Optional
 
+from langchain_core.tools import Tool
 from pydantic import BaseModel
 
 from dataclasses import dataclass, field
@@ -188,3 +189,24 @@ class PlanningTool(BaseModel):
             return f"Update status error: {str(e)}"
 
         return f"Plan status updated: \n {str(self.plan)}"
+
+def get_planning_tools():
+    planning_tool = PlanningTool()
+    planning_tools = [
+        Tool(
+            name="create_plan",
+            func=planning_tool.create_plan,
+            description="Create a new plan with a list of steps. **Required:** steps (str, comma separated step contents)"
+        ),
+        Tool(
+            name="update_plan",
+            func=planning_tool.update_plan,
+            description="Update an existing plan with a new list of steps. **Required:** steps (str, comma separated step contents)"
+        ),
+        Tool(
+            name="update_status",
+            func=planning_tool.update_status,
+            description="Update the status of plan steps. **Required:** statuses (str, comma separated status in ['not_started', 'in_progress', 'completed'])"
+        )
+    ]
+    return planning_tools
