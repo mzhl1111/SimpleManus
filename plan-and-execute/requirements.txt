@@ -7,4 +7,6 @@ tavily-python>=0.1.6
 pydantic>=2.0.0
 colorama>=0.4.4
 requests>=2.28.0
-openai>=1.0.0 
+openai>=1.0.0
+browser-use
+googlesearch-python 

@@ -1,434 +1,453 @@
 """
-General purpose assistant using LangGraph for workflow management.
-Implements the Plan-and-Execute pattern.
+Simplified Plan-and-Execute framework using LangGraph.
 """
 import logging
-import operator
-from typing import Dict, Any, TypedDict, List, Annotated
+from typing import Dict, Any, TypedDict, List, Optional, Union
+import time
 
-from langgraph.graph import StateGraph, END
-from langgraph.graph.graph import CompiledGraph
-from pydantic import BaseModel
+from langchain.prompts import SystemMessagePromptTemplate
+from langchain.schema import HumanMessage, BaseMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, END, MessagesState
+from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
 
-from planner_engine import Planner, Executor, Replanner
-from agent_tools import AGENT_TOOLS
-
+# Import configuration and tools
 import config
+import prompt_templates
+from agent_tools import initialize_tools
+from utils.mlflow_callback import MLflowTracker
+import mlflow
 
 # Configure logging
 logging.basicConfig(
     level=config.LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(levelname)-8s [%(name)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 
-# Define application state type
-class AgentState(TypedDict):
-    """State definition for the general purpose assistant"""
-    input: str                                      # User's original request
-    plan: List[Dict[str, Any]]                      # Current plan steps
-    past_steps: Annotated[List[Dict[str, Any]], operator.add]  # Results of executed steps
-    current_step_index: int                         # Index of current step
-    extracted_info: Dict[str, Any]                  # Extracted information
-    response: str                                   # Final response to user
-    replan_count: int                               # Count of replanning attempts
+class PlanState(TypedDict):
+    """State definition: stores plan steps and execution status"""
+    input: str
+    messages: List[BaseMessage]
+    plan: List[Dict[str, Any]]
+    current_step: int
+    past_steps: List[Dict[str, Any]]
+    error: Optional[str]
+    result: Optional[str]
+
+
+def make_system_prompt(prompt_text):
+    """Create a system prompt for the agent"""
+    return prompt_text
 
 
 class AgentGraph:
-    """General purpose assistant using LangGraph with Plan-and-Execute pattern"""
-    
-    def __init__(self):
-        """Initialize the assistant"""
-        # Initialize components
-        self.planner = Planner()
-        self.executor = Executor()
-        self.replanner = Replanner()
+    """LangGraph agent implementation with planning and execution"""
+
+    def __init__(self, llm=None, tools_config=None):
+        """Initialize agent graph with LLM and tools"""
+        if not llm:
+            # Use OpenRouter API
+            from pydantic import SecretStr
+            model_name = config.LLM_MODEL or "openai/gpt-3.5-turbo"
+            self.llm = ChatOpenAI(
+                model=model_name,
+                temperature=0,
+                api_key=SecretStr(config.OPENROUTER_API_KEY),
+                base_url="https://openrouter.ai/api/v1"
+            )
+        else:
+            self.llm = llm
         
-        # Create the graph
+        # Initialize MLflow tracking
+        self.mlflow_tracker = MLflowTracker(experiment_name="PlanAndExecute_Agent")
+        
+        # Add MLflow tracker to callbacks
+        self.llm.callbacks = [self.mlflow_tracker]
+        
+        # Initialize with MLflow callback
+        self.tools = initialize_tools(llm=self.llm)
+        
+        # Create agents
+        self.planner_agent = self._create_planner()
+        self.executor_agent = self._create_executor()
+        
+        # Compile workflow graph
         self.graph = self._create_graph()
         
-        # Track string plan conversion attempts
-        self.string_plan_count = 0
-    
-    def _create_graph(self) -> CompiledGraph:
-        """Create the workflow graph"""
-        # Create workflow graph
-        workflow = StateGraph(AgentState)
+    def _create_graph(self):
+        """Create and compile workflow graph"""
+        workflow = StateGraph(MessagesState)
         
-        # Add the main nodes
+        # Add planning and execution nodes
         workflow.add_node("planner", self._planner_node)
         workflow.add_node("executor", self._executor_node)
-        workflow.add_node("replanner", self._replanner_node)
         
-        # Set entry point
+        # Set entry point to planner
         workflow.set_entry_point("planner")
         
-        # Add edges for the main workflow
-        workflow.add_edge("planner", "executor")
-        workflow.add_edge("executor", "replanner")
-        
-        # Add conditional edges from replanner
+        # Conditional jumps: planner -> executor/end
         workflow.add_conditional_edges(
-            "replanner",
-            self._should_continue_or_end,
+            "planner",
+            self._decide_after_planning,
             {
-                "continue": "executor",
-                "end": END
+                "execute": "executor",
+                "finish": END
             }
         )
         
-        # Compile the graph
-        return workflow.compile()
+        # Conditional jumps: executor -> planner/end
+        workflow.add_conditional_edges(
+            "executor",
+            self._decide_after_execution,
+            {
+                "replan": "planner",
+                "finish": END
+            }
+        )
+        
+        # Compile workflow graph
+        graph = workflow.compile()
+        return graph
     
-    def _planner_node(self, state: AgentState) -> Dict[str, Any]:
-        """Generate a plan based on user input"""
-        try:
-            # Extract the user input
-            user_input = state["input"]
-            logger.info(f"Creating plan for: {user_input}")
-            
-            # Generate a plan
-            plan = self.planner.create_plan(user_input)
-            
-            # Return the updated state
-            return {
-                "plan": plan,
-                "current_step_index": 0,
-                "past_steps": [],
-                "replan_count": 0  # Initialize replan counter
-            }
-        except Exception as e:
-            logger.error(f"Error in planner node: {str(e)}")
-            # Create a minimal default plan
-            return {
-                "plan": [
-                    {
-                        "step_id": 1,
-                        "description": "Extract information from user input",
-                        "tool": "extract_information",
-                        "tool_input": {"user_input": state["input"]}
-                    }
-                ],
-                "current_step_index": 0,
-                "past_steps": [],
-                "replan_count": 0  # Initialize replan counter
-            }
-    
-    def _executor_node(self, state: AgentState) -> Dict[str, Any]:
-        """Execute the current step in the plan"""
-        try:
-            # Get the current step
-            current_index = state["current_step_index"]
-            plan = state["plan"]
-            
-            if current_index >= len(plan):
-                logger.warning("No more steps to execute")
-                return {}
-            
-            current_step = plan[current_index]
-            
-            # Ensure current_step is a dictionary
-            if not isinstance(current_step, dict):
-                logger.error(f"Step {current_index+1} is not a dictionary: {current_step}")
-                return {
-                    "past_steps": [{
-                        "error": f"Invalid step format: {type(current_step).__name__}",
-                        "step_id": current_index + 1,
-                        "tool": "unknown"
-                    }],
-                    "current_step_index": current_index + 1
-                }
-            
-            step_id = current_step.get('step_id', current_index+1)
-            description = current_step.get('description', 'Execute step')
-            tool_name = current_step.get("tool", "")
-            
-            logger.info(f"==== EXECUTING STEP {step_id}: {description} ====")
-            logger.info(f"Tool: {tool_name}")
-            
-            if not tool_name:
-                logger.error("Missing tool name in step")
-                return {
-                    "past_steps": [{
-                        "error": "Missing tool name in step",
-                        "step_id": current_index + 1,
-                        "tool": "unknown"
-                    }],
-                    "current_step_index": current_index + 1
-                }
-                
-            # Process parameters for all tools
-            processed_params = {}
-            extracted_info = state.get("extracted_info", {})
-            past_steps = state.get("past_steps", [])
-            
-            # Create mapping of past_steps results
-            past_results = {}
-            for step in past_steps:
-                if "tool" in step and "result" in step:
-                    past_results[step["tool"]] = step["result"]
-            
-            tool_input = current_step.get("tool_input", {})
-            # Ensure tool_input is a dictionary
-            if not isinstance(tool_input, dict):
-                logger.warning(f"tool_input is not a dictionary, converting: {tool_input}")
-                tool_input = {}
-            
-            logger.info(f"Original tool_input: {tool_input}")
-                
-            for param_key, param_value in tool_input.items():
-                if isinstance(param_value, str):
-                    if "{{extracted_info." in param_value:
-                        # Extract field name from extracted_info
-                        field = param_value.replace("{{extracted_info.", "").replace("}}", "")
-                        processed_params[param_key] = extracted_info.get(field, "Not provided")
-                        logger.info(f"Parameter {param_key}: Replaced {{{{extracted_info.{field}}}}} with {processed_params[param_key]}")
-                    elif "{{past_steps." in param_value:
-                        # Extract tool name from past_steps
-                        tool_name_ref = param_value.replace("{{past_steps.", "").replace("}}", "")
-                        
-                        # Find most recent step result with matching tool name
-                        matching_result = None
-                        for prev_step in reversed(past_steps):  # Start from most recent step
-                            if prev_step.get("tool") == tool_name_ref and "result" in prev_step:
-                                matching_result = prev_step["result"]
-                                break
-                                
-                        if matching_result is not None:
-                            processed_params[param_key] = matching_result
-                            logger.info(f"Parameter {param_key}: Replaced {{{{past_steps.{tool_name_ref}}}}} with result from previous step")
-                        else:
-                            processed_params[param_key] = None
-                            logger.warning(f"Parameter {param_key}: Could not find result for {{{{past_steps.{tool_name_ref}}}}}")
-                    else:
-                        processed_params[param_key] = param_value
-                        logger.info(f"Parameter {param_key}: Using value {param_value}")
-                else:
-                    processed_params[param_key] = param_value
-                    logger.info(f"Parameter {param_key}: Using non-string value")
-            
-            # Update parameters
-            current_step["tool_input"] = processed_params
-            logger.info(f"Processed tool_input: {processed_params}")
-            
-            # Execute the step
-            try:
-                logger.info(f"Calling tool: {tool_name} with parameters: {processed_params}")
-                result = self.executor.execute_step(current_step)
-                logger.info(f"Tool execution result type: {type(result)}")
-                logger.info(f"Tool execution result (truncated): {str(result)[:200]}...")
-            except Exception as e:
-                logger.error(f"Error executing step: {str(e)}")
-                result = {"error": str(e)}
-            
-            # Create the result node to add to past_steps
-            result_node = {
-                "step_id": current_step.get("step_id", current_index + 1),
-                "description": current_step.get("description", ""),
-                "tool": tool_name,
-                "tool_input": current_step.get("tool_input", {}),
-                "result": result
-            }
-            
-            # Check if this is an information extraction step, if so, update the state
-            if tool_name == "extract_information" and isinstance(result, dict):
-                logger.info(f"Extracted information: {result}")
-                return {
-                    "past_steps": [result_node],
-                    "current_step_index": current_index + 1,
-                    "extracted_info": result
-                }
-            
-            # Otherwise, just return past_steps and update the current index
-            logger.info(f"Completed step {step_id}: {description}")
-            return {
-                "past_steps": [result_node],
-                "current_step_index": current_index + 1
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in executor node: {str(e)}")
-            return {
-                "past_steps": [{
-                    "error": str(e),
-                    "step_id": state.get("current_step_index", 0) + 1,
-                    "tool": "unknown"
-                }],
-                "current_step_index": state.get("current_step_index", 0) + 1
-            }
-    
-    def _replanner_node(self, state: AgentState) -> Dict[str, Any]:
-        """Determine if additional steps are needed or generate the final response"""
-        try:
-            current_index = state["current_step_index"]
-            plan = state["plan"]
-            
-            # Check if we've reached the end of the plan
-            if current_index >= len(plan):
-                logger.info("Reached end of plan, generating final response")
-                return self._generate_final_response(state)
-            
-            # Check the last executed step for errors
-            past_steps = state.get("past_steps", [])
-            if past_steps:
-                last_step = past_steps[-1]
-                if "error" in last_step:
-                    # If there's an error, increment replan count
-                    replan_count = state.get("replan_count", 0) + 1
-                    
-                    # If we've replan too many times, generate a final response with an error
-                    if replan_count >= 3:
-                        logger.warning(f"Reached maximum replan count ({replan_count}), generating error response")
-                        return self._generate_final_response(state, {
-                            "error": f"Failed to complete the plan after {replan_count} retries. Last error: {last_step.get('error')}"
-                        })
-                    
-                    # Otherwise, attempt to replan
-                    logger.info(f"Step {last_step.get('step_id')} failed, attempting to replan (attempt {replan_count})")
-                    
-                    # Get the error details
-                    error_message = last_step.get("error", "Unknown error")
-                    
-                    # Generate a new plan starting from the current step
-                    replan_result = self.replanner.create_new_plan(
-                        state["input"], 
-                        state.get("extracted_info", {}),
-                        past_steps,
-                        error_message,
-                        current_index
+    def _planner_node(self, state: MessagesState) -> Command:
+        """Planner node processing logic"""
+        # Call planner agent
+        logger.info("[PLANNER NODE] Generating plan...")
+        
+        # Check if we've already gone through too many planning cycles
+        planning_msg_count = sum(
+            1 for msg in state["messages"]
+            if hasattr(msg, 'name') and msg.name == "planner"
+        )
+        if planning_msg_count > 10:
+            logger.warning("[PLANNER] Too many planning steps, forcing finish")
+            return Command(
+                update={"messages": state["messages"] + [
+                    HumanMessage(
+                        content="FINAL ANSWER: I've reached my planning limit.",
+                        name="planner"
                     )
-                    
-                    if not replan_result or not isinstance(replan_result, dict) or "plan" not in replan_result:
-                        logger.error(f"Replanner failed to generate a valid plan: {replan_result}")
-                        return self._generate_final_response(state, {
-                            "error": f"Failed to generate a new plan: {error_message}"
-                        })
-                    
-                    # Extract the new plan
-                    new_plan = replan_result.get("plan", [])
-                    
-                    # Update the plan in the state
-                    if new_plan:
-                        return {
-                            "plan": new_plan,
-                            "current_step_index": 0,  # Reset to beginning of new plan
-                            "replan_count": replan_count
-                        }
-                    else:
-                        logger.error(f"Replanner returned an empty plan after error: {error_message}")
-                        return self._generate_final_response(state, {
-                            "error": f"Failed to generate a new plan after error: {error_message}"
-                        })
-            
-            # Continue with the next step in the plan
-            return {}
-            
-        except Exception as e:
-            logger.error(f"Error in replanner node: {str(e)}")
-            return self._generate_final_response(state, {
-                "error": f"Error in plan execution: {str(e)}"
-            })
-    
-    def _generate_final_response(self, state: AgentState, replan_result: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Generate a final response based on the completed steps"""
+                ]},
+                goto="finish",
+            )
+        
         try:
-            # If there's a replan error, use it to generate an error response
-            if replan_result and "error" in replan_result:
-                error_message = replan_result["error"]
-                logger.error(f"Generating error response: {error_message}")
-                response = f"I'm sorry, I wasn't able to complete your request due to an error: {error_message}"
-                return {
-                    "response": response
-                }
+            result = self.planner_agent.invoke(state)
             
-            # If no plan has been executed, return a simple response
-            past_steps = state.get("past_steps", [])
-            if not past_steps:
-                logger.warning("No steps executed, generating generic response")
-                return {
-                    "response": "I'm sorry, I wasn't able to process your request. Please try again with more details."
-                }
+            # Wrap as human message to pass to next node
+            result["messages"][-1] = HumanMessage(
+                content=result["messages"][-1].content,
+                name="planner"
+            )
             
-            # Analyze past steps and generate a coherent response
-            user_request = state.get("input", "your request")
+            # Decide next step based on content
+            content = result["messages"][-1].content
+            next_node = "execute"
             
-            # Find the answer generation step result if it exists
-            answer = None
-            for step in past_steps:
-                if step.get("tool") == "generate_answer" and isinstance(step.get("result"), str):
-                    answer = step.get("result")
-                    break
+            if "FINAL ANSWER" in content:
+                next_node = "finish"
             
-            # If we found an answer from generate_answer, use it
-            if answer:
-                return {"response": answer}
+            return Command(
+                update={"messages": result["messages"]},
+                goto=next_node,
+            )
+        except Exception as e:
+            logger.error(f"Error in planner node: {str(e)}", exc_info=True)
+            return Command(
+                update={"messages": state["messages"] + [
+                    HumanMessage(
+                        content=f"FINAL ANSWER: Error during planning: {str(e)}",
+                        name="planner"
+                    )
+                ]},
+                goto="finish",
+            )
+    
+    def _executor_node(self, state: MessagesState) -> Command:
+        """Executor node processing logic"""
+        # Call executor agent
+        logger.info("[EXECUTOR NODE] Executing plan...")
+        
+        # Check if we've already gone through too many execution cycles
+        exec_msg_count = sum(
+            1 for msg in state["messages"]
+            if hasattr(msg, 'name') and msg.name == "executor"
+        )
+        
+        # Check number of search attempts to prevent infinite searching
+        search_attempts = sum(
+            1 for msg in state["messages"] 
+            if "Executing backup search" in str(msg.content)
+        )
+        
+        # If too many search attempts, force finish with what we know
+        if search_attempts > 10:
+            logger.warning(f"[EXECUTOR] Too many search attempts ({search_attempts}), forcing finish")
+            return Command(
+                update={"messages": state["messages"] + [
+                    HumanMessage(
+                        content=("FINAL ANSWER: I'm unable to find precise information after "
+                                "multiple search attempts. Please try a simpler question or "
+                                "provide more specific details."),
+                        name="executor"
+                    )
+                ]},
+                goto="finish",
+            )
             
-            # Otherwise, try to find any useful information from other steps
-            useful_results = []
-            for step in past_steps:
-                result = step.get("result")
-                tool = step.get("tool")
+        if exec_msg_count > 15:
+            logger.warning("[EXECUTOR] Too many execution steps, forcing finish")
+            return Command(
+                update={"messages": state["messages"] + [
+                    HumanMessage(
+                        content="FINAL ANSWER: I've reached my execution limit.",
+                        name="executor"
+                    )
+                ]},
+                goto="finish",
+            )
+        
+        try:
+            result = self.executor_agent.invoke(state)
+            
+            # Wrap as human message to pass to next node
+            result["messages"][-1] = HumanMessage(
+                content=result["messages"][-1].content,
+                name="executor"
+            )
+            
+            # Decide next step based on content
+            content = result["messages"][-1].content
+            next_node = "replan"
+            
+            if "FINAL ANSWER" in content:
+                next_node = "finish"
+            elif "NEED REPLAN" in content:
+                next_node = "replan"
+            elif not any(marker in content.lower() 
+                        for marker in ["continue", "next step", "proceed"]):
+                next_node = "finish"
+            
+            return Command(
+                update={"messages": result["messages"]},
+                goto=next_node,
+            )
+        except Exception as e:
+            logger.error(f"Error in executor node: {str(e)}", exc_info=True)
+            return Command(
+                update={"messages": state["messages"] + [
+                    HumanMessage(
+                        content=f"FINAL ANSWER: Error during execution: {str(e)}",
+                        name="executor"
+                    )
+                ]},
+                goto="finish",
+            )
+    
+    def _decide_after_planning(self, state: MessagesState) -> str:
+        """Post-planning decision: execute or finish"""
+        # Get the last message
+        last_message = state["messages"][-1]
+        content = last_message.content
+        
+        # Track number of planning steps to prevent infinite recursion
+        planning_msg_count = sum(1 for msg in state["messages"] 
+                              if hasattr(msg, 'name') and msg.name == "planner")
+        if planning_msg_count > 10:
+            logger.warning("[PLANNER] Too many planning steps, forcing finish")
+            return "finish"
+            
+        # If message contains completion marker
+        if "FINAL ANSWER" in content:
+            return "finish"
+        
+        # Default to continue execution
+        return "execute"
+    
+    def _decide_after_execution(self, state: MessagesState) -> str:
+        """Post-execution decision: replan or finish"""
+        # Get the last message
+        last_message = state["messages"][-1]
+        content = last_message.content
+        
+        # Track number of execution steps to prevent infinite recursion
+        exec_msg_count = sum(1 for msg in state["messages"] 
+                          if hasattr(msg, 'name') and msg.name == "executor")
+        if exec_msg_count > 15:
+            logger.warning("[EXECUTOR] Too many execution steps, forcing finish")
+            return "finish"
+            
+        # If message contains completion marker
+        if "FINAL ANSWER" in content:
+            return "finish"
+            
+        # If replanning is explicitly requested
+        if "NEED REPLAN" in content:
+            return "replan"
+        
+        # Default to finish if no clear directive is given
+        markers = ["continue", "next step", "proceed"]
+        if not any(marker in content for marker in markers):
+            return "finish"
+            
+        # Default to return to planning
+        return "replan"
+    
+    async def ainvoke(self, input_data: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Asynchronously execute agent graph"""
+        # Prepare initial state
+        if isinstance(input_data, str):
+            initial_state = self._prepare_initial_state(input_data)
+        else:
+            initial_state = input_data
+            
+        # Execute graph
+        try:
+            # Track start time for performance monitoring
+            start_time = time.time()
+            
+            result = await self.graph.ainvoke(initial_state)
+            
+            # Log execution metrics
+            execution_time = time.time() - start_time
+            self.mlflow_tracker.log_metric()
+            
+            # Log custom metrics
+            mlflow.log_metric("execution_time", execution_time)
+            mlflow.log_metric("query_length", len(str(input_data)))
+            
+            # Log the query text
+            if isinstance(input_data, str):
+                mlflow.log_param("query", input_data[:250])  # Truncate if too long
                 
-                # Skip extraction steps but include other results
-                if tool != "extract_information" and result:
-                    if isinstance(result, dict) and len(str(result)) > 10:
-                        useful_results.append(f"From {tool}: {result}")
-                    elif isinstance(result, str) and len(result) > 10:
-                        useful_results.append(result)
-            
-            # If we have useful results, compile them
-            if useful_results:
-                response = "\n\n".join(["Here's what I found:"] + useful_results)
-                return {"response": response}
-            
-            # If nothing useful found, return a basic response
-            basic_response = "\n".join([
-                f"In response to your query about '{user_request}', I couldn't find detailed information.",
-                "",
-                "Please try asking in a different way or provide more details."
-            ])
-            
-            return {"response": basic_response}
-            
+            return self._process_result(result)
         except Exception as e:
-            logger.error(f"Error generating final response: {str(e)}")
-            return {
-                "response": f"I'm sorry, I encountered an error while generating your response: {str(e)}"
-            }
-    
-    def _should_continue_or_end(self, state: AgentState) -> str:
-        """Determine if the graph should continue or end"""
-        # End if we have a response
-        if "response" in state and state["response"]:
-            return "end"
-        return "continue"
-    
-    def run(self, user_input: str) -> Dict[str, Any]:
-        """Run the general purpose assistant with the given input"""
-        try:
-            # Create the initial state
-            initial_state = self._create_initial_state(user_input)
-            
-            # Run the graph
-            final_state = self.graph.invoke(initial_state)
-            
-            return final_state
-        except Exception as e:
-            logger.error(f"Error running assistant: {str(e)}")
+            logger.error(f"Error executing graph: {str(e)}", exc_info=True)
+            # Log error in MLflow
+            mlflow.log_param("error", str(e)[:250])  # Truncate if too long
             return {
                 "error": str(e),
-                "response": f"I'm sorry, an error occurred: {str(e)}"
+                "messages": initial_state.get("messages", []),
+                "result": "Error occurred during execution"
             }
     
-    def _create_initial_state(self, user_input: str) -> AgentState:
-        """Create the initial state for the graph"""
+    def invoke(self, input_data: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Synchronously execute agent graph"""
+        import asyncio
+        
+        # Create event loop for async calls
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(self.ainvoke(input_data))
+            return result
+        finally:
+            loop.close()
+    
+    def _prepare_initial_state(self, user_input: str) -> Dict[str, Any]:
+        """Prepare initial state"""
         return {
-            "input": user_input,
-            "plan": [],
-            "past_steps": [],
-            "current_step_index": 0,
-            "extracted_info": {},
-            "response": "",
-            "replan_count": 0
-        } 
+            "messages": [HumanMessage(content=user_input)]
+        }
+    
+    def _process_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Process final result, extract FINAL ANSWER"""
+        messages = result.get("messages", [])
+        
+        # Extract final answer from last message
+        final_answer = None
+        if messages:
+            last_message = messages[-1]
+            if "FINAL ANSWER" in last_message.content:
+                # Extract content after FINAL ANSWER:
+                parts = last_message.content.split("FINAL ANSWER:", 1)
+                if len(parts) > 1:
+                    final_answer = parts[1].strip()
+        
+        # Get final result text
+        result_text = final_answer or "Execution completed but no clear final result found"
+        
+        # Log result metrics
+        # Count total tokens used from messages
+        msg_count = len(messages)
+        mlflow.log_metric("message_count", msg_count)
+        mlflow.log_metric("result_length", len(str(result_text)))
+        
+        # Calculate token estimates if not properly tracked
+        if self.mlflow_tracker.total_tokens == 0:
+            # Estimate tokens: ~4 chars per token for English text
+            estimated_input_tokens = sum(len(str(msg.content)) // 4 
+                                        for msg in messages if hasattr(msg, 'content'))
+            estimated_output_tokens = len(str(result_text)) // 4
+            
+            # Log estimated token counts
+            mlflow.log_metrics({
+                "estimated_input_tokens": estimated_input_tokens,
+                "estimated_output_tokens": estimated_output_tokens,
+                "estimated_total_tokens": estimated_input_tokens + estimated_output_tokens
+            })
+        
+        return {
+            "messages": messages,
+            "result": result_text,
+            "raw_result": result
+        }
+
+    def _create_planner(self):
+        """Create planner agent"""
+        # Isolate planning tools
+        planning_tools = [tool for tool in self.tools if tool.name in [
+            "create_plan", "update_plan", "update_status"
+        ]]
+        
+        # Use ReAct as planner
+        return create_react_agent(
+            model=self.llm,
+            tools=planning_tools,
+            prompt=make_system_prompt(prompt_templates.PLANNER_PROMPT)
+        )
+    
+    def _create_executor(self):
+        """Create executor agent"""
+        # Filter for execution tools (non-planning tools)
+        execution_tools = [tool for tool in self.tools if tool.name not in [
+            "create_plan", "update_plan", "update_status"
+        ]]
+        
+        # Use ReAct as executor
+        return create_react_agent(
+            model=self.llm,
+            tools=execution_tools,
+            prompt=make_system_prompt(prompt_templates.EXECUTOR_PROMPT)
+        )
+
+
+def run(query: str) -> Dict[str, Any]:
+    """Run agent graph and get results"""
+    agent_graph = AgentGraph()
+    
+    try:
+        result = agent_graph.invoke(query)
+        
+        # Print final result
+        if "result" in result:
+            print(f"\nFinal Response:\n{result['result']}")
+            
+        # Get usage report
+        usage_report = agent_graph.mlflow_tracker.get_usage_report()
+        mlflow.log_metrics({
+            "total_steps": len(result.get("messages", [])),
+            "plan_completion": 1.0  # Indicates plan was completed
+        })
+        
+        # End MLflow run
+        mlflow.end_run()
+        
+        return result
+    except Exception as e:
+        # End MLflow run in case of error
+        mlflow.end_run()
+        logger.error(f"Error in agent run: {str(e)}")
+        return {"error": str(e), "result": "Error during execution"} 
