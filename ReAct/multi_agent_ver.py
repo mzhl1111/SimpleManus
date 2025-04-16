@@ -220,6 +220,16 @@ workflow.add_node("browser", browser_node)
 workflow.add_edge(START, "planner")
 graph = workflow.compile()
 
+
+def get_multi_agent_graph():
+    w = StateGraph(MessagesState)
+    w.add_node("planner", planning_node)
+    w.add_node("browser", browser_node)
+
+    w.add_edge(START, "planner")
+    g = w.compile()
+    return g
+
 async def main():
     inputs = {
         "messages": [
