@@ -56,3 +56,6 @@ class MLflowTracker(BaseCallbackHandler):
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens
         })
+
+    def log_success(self, result):
+        mlflow.log_metric("success", result)

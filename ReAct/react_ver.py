@@ -1,5 +1,6 @@
 import asyncio
 
+import mlflow
 from dotenv import load_dotenv
 
 from utils.chat_open_router import ChatOpenRouter
@@ -34,7 +35,7 @@ llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=False)
 
 # System prompt
 sys_msg = SystemMessage(content="You are a helpful assistant interact with browser to finish tasks up on user requests."
-                                "If you cannot find wanted information in current web page for few steps, please try "
+                                "If you cannot find wanted information in current web page for few trys, please use "
                                 "other links in the search results or redo web searching with new query")
 
 # Node
@@ -61,23 +62,55 @@ react_graph = builder.compile()
 
 # Show
 # display(Image(react_graph.get_graph(xray=True).draw_mermaid_png()))
+def get_react_graph():
+    b = StateGraph(MessagesState)
 
+    # Define nodes: these do the work
+    b.add_node("assistant", assistant)
+    b.add_node("tools", ToolNode(tools))
+
+    # Define edges: these determine how the control flow moves
+    b.add_edge(START, "assistant")
+    b.add_conditional_edges(
+        "assistant",
+        # If the latest message (result) from assistant is a tool call -> tools_condition routes to tools
+        # If the latest message (result) from assistant is a not a tool call -> tools_condition routes to END
+        tools_condition,
+    )
+    b.add_edge("tools", "assistant")
+    g = builder.compile()
+    return g
 
 async def main():
     inputs = {
         "messages": [
             (
                 "user",
-                "help me get the source code of create_react_agent function definition in langgraph package",
+                """Plan a trip based on the following requirement with detail
+Destination: Barcelona, Spain  
+Travel Dates: June 10–June 17  
+Origin: New York City, USA  
+Hotel Preferences: 3–5 stars, city center, free Wi-Fi  
+Food Preferences: Local cuisine, highly rated spots  """,
             )
         ],
     }
-    handler = MLflowTracker(experiment_name="react_ver")
-    messages = await react_graph.ainvoke(inputs, {"callbacks": [handler], "recursion_limit": 100})
+    handler = MLflowTracker(experiment_name="wiki")
+    try:
+        messages = await react_graph.ainvoke(inputs, {"callbacks": [handler], "recursion_limit": 50})
+    except Exception as e:
+        handler.log_metric()
+        handler.log_success(0)
+        messages = None
+
     handler.log_metric()
-    for m in messages['messages']:
-        m.pretty_print()
+    handler.log_success(1)
+
+    if messages:
+        for m in messages['messages']:
+            m.pretty_print()
 
 if __name__ == "__main__":
+    mlflow.set_tracking_uri("http://localhost:5001")
     asyncio.run(main())
 
