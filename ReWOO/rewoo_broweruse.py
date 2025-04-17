@@ -15,7 +15,7 @@ import json
 import os
 from dotenv import load_dotenv
 from typing import Union
-from .tools.browser_use_tool import BrowserUseTool
+from ReWOO.tools.browser_use_tool import BrowserUseTool
 
 # Load environment variables for API keys and configurations
 load_dotenv()
@@ -42,7 +42,7 @@ class ReWOOState(TypedDict):
 model = ChatOpenAI(
     openai_api_key=os.getenv("OPENROUTER_API_KEY"),
     openai_api_base=os.getenv("OPENROUTER_BASE_URL"),
-    model_name="google/gemini-2.0-flash-001"
+    model_name="openai/gpt-4o-mini-2024-07-18"
 )
 
 # Initialize Tavily search tool for web searches
@@ -415,7 +415,7 @@ if __name__ == "__main__":
     async def main():
         # Initialize with empty messages list
         initial_state = {
-            "task": "What is the name of the director of the highest-grossing movie released in 2023? Go to that director's Wikipedia page and briefly describe their biography.",
+            "task": """Compare Alienware x16 and Macbook Pro 16inch M4 extract detailed specifications and possiblely benchmark score for for each item, such as processor type, RAM, GPU, storage, display size, and price. Navigate to the website if needed to get more information""",
             "messages": []  # Initialize empty messages list
         }
         final_state = None  # To store the last state
