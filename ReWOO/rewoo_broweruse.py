@@ -415,7 +415,7 @@ if __name__ == "__main__":
     async def main():
         # Initialize with empty messages list
         initial_state = {
-            "task": """Compare Alienware x16 and Macbook Pro 16inch M4 extract detailed specifications and possiblely benchmark score for for each item, such as processor type, RAM, GPU, storage, display size, and price. Navigate to the website if needed to get more information""",
+            "task": """Compare Alienware x16 and Macbook Pro 16inch M4 extract detailed specifications and possibly benchmark score for each item, such as processor type, RAM, GPU, storage, display size, and price. Navigate to the website if needed to get more information""",
             "messages": []  # Initialize empty messages list
         }
         final_state = None  # To store the last state
