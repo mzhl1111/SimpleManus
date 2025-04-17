@@ -1,7 +1,7 @@
 # SimpleManus: Multi-Agent Browser Automation Framework
 
 ## Video Demo
-[![SimpleManus Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+![](./travel_plan_demo.mp4)
 
 SimpleManus is a Python-based framework for building and testing multi-agent architectures with browser automation capabilities. It enables the creation of intelligent agents that can collaborate to complete complex web-based tasks through a combination of planning and execution.
 
