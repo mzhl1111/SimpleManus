@@ -8,7 +8,7 @@ This project contains three main components:
 
 1. **ReWOO Framework Demo** (`rewoo_example_1.py`): A demonstration of the ReWOO framework that implements a reasoning agent using the search tool.
 2. **Tavily Search API Demo** (`tavily_example_1.py`): A simple example showing how to use the Tavily search API with answer generation.
-3. **(WORK IN PROGRESS) ReWOO Browser Use** (`rewoo_browseruse.py`): An advanced implementation of the ReWOO framework that combines web search, LLM reasoning, and browser automation to perform complex web-based tasks.
+3. **ReWOO Browser Use** (`rewoo_browseruse.py`): An advanced implementation of the ReWOO framework that combines web search, LLM reasoning, and browser automation to perform complex web-based tasks.
 
 ## Features
 
@@ -44,6 +44,10 @@ Create a `.env` file with the following API keys:
 OPENROUTER_API_KEY=your_openrouter_api_key
 OPENROUTER_BASE_URL=your_openrouter_base_url
 TAVILY_API_KEY=your_tavily_api_key
+# Below are for Langsmith tracing (optional)
+LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
+LANGSMITH_API_KEY=your_langsmith_api_key
+LANGCHAIN_TRACING_V2="true"
 ```
 
 ## Usage
